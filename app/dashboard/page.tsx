@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { LogOut, Settings, FileUp, Copy, Camera, ChevronRight, Loader2, X, Clock, TrendingUp, BookOpen, Zap } from "lucide-react"
+import { LogOut, Settings, FileUp, Copy, Camera, ChevronRight, Loader2, X, Clock, TrendingUp, BookOpen, Zap, AlertCircle } from "lucide-react"
 import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
 import type { ReactElement } from "react"
@@ -77,16 +77,39 @@ export default function DashboardPage() {
   const [selectedChain, setSelectedChain] = useState<AnalysisChain | null>(null)
   const [recentEssays, setRecentEssays] = useState<EssayData[]>([])
   const [markingProgress, setMarkingProgress] = useState(0)
+  const [essaysRemaining, setEssaysRemaining] = useState(3)
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
 
   useEffect(() => {
     const checkAuth = async () => {
       const supabase = createClient()
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) router.push("/auth/login")
-      else loadRecentEssays()
+      else {
+        loadRecentEssays()
+        checkEssayCount()
+      }
     }
     checkAuth()
   }, [router])
+
+  const checkEssayCount = async () => {
+    try {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const { count } = await supabase
+        .from('essays')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+
+      const remaining = Math.max(0, 3 - (count || 0))
+      setEssaysRemaining(remaining)
+    } catch (error) {
+      console.error('Failed to check essay count:', error)
+    }
+  }
 
   const loadRecentEssays = async () => {
     try {
@@ -128,11 +151,16 @@ export default function DashboardPage() {
       return
     }
 
+    // Check AFTER they click - show modal instead of blocking
+    if (essaysRemaining <= 0) {
+      setShowUpgradeModal(true)
+      return
+    }
+
     setIsMarking(true)
     setMarkingError("")
     setMarkingProgress(0)
 
-    // Simulate progress
     const progressInterval = setInterval(() => {
       setMarkingProgress(prev => Math.min(prev + Math.random() * 15, 90))
     }, 1000)
@@ -204,6 +232,7 @@ export default function DashboardPage() {
 
       setHasEssay(true)
       await loadRecentEssays()
+      await checkEssayCount()
     } catch (error) {
       clearInterval(progressInterval)
       console.error("Submit error:", error)
@@ -324,15 +353,15 @@ export default function DashboardPage() {
   const structureGuidance = markAllocation ? getStructureGuidance(Number(markAllocation)) : ""
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 dark:from-gray-900 dark:to-gray-800 flex">
-      {/* IMPROVED SIDEBAR - More Visible */}
+    <div className="min-h-screen bg-gradient-to-br from-teal-50/30 via-cyan-50/20 to-gray-50 dark:from-gray-900 dark:to-gray-800 flex">
+      {/* SIDEBAR - TEAL WITH TOUCH OF BLUE */}
       <div
-        className={`fixed left-0 top-0 bottom-0 z-30 transition-all duration-300 ${sidebarOpen ? "w-72" : "w-16"} bg-gradient-to-br from-teal-600 to-blue-600 shadow-2xl`}
+        className={`fixed left-0 top-0 bottom-0 z-30 transition-all duration-300 ${sidebarOpen ? "w-72" : "w-16"} shadow-2xl`}
+        style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)' }}
         onMouseEnter={() => setSidebarOpen(true)}
         onMouseLeave={() => setSidebarOpen(false)}
       >
         <div className="h-full flex flex-col p-4">
-          {/* Logo/Icon */}
           <div className="mb-6 flex items-center gap-3">
             <div className="w-10 h-10 bg-white/20 backdrop-blur rounded-lg flex items-center justify-center shrink-0">
               <TrendingUp className="w-6 h-6 text-white" />
@@ -342,7 +371,6 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Recent Essays */}
           <div className="flex-1 overflow-y-auto">
             {sidebarOpen && recentEssays.length > 0 ? (
               <div className="space-y-2">
@@ -367,7 +395,6 @@ export default function DashboardPage() {
             ) : null}
           </div>
 
-          {/* Bottom Icon */}
           {!sidebarOpen && (
             <div className="flex flex-col items-center gap-4">
               <Clock className="w-5 h-5 text-white/60" />
@@ -376,16 +403,32 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Main Content - Adjusted for sidebar */}
+      {/* Main Content */}
       <div className="flex-1 flex flex-col ml-16">
         <header className="border-b border-border/30 bg-white/50 dark:bg-gray-900/50 backdrop-blur sticky top-0 z-40 shadow-sm">
           <div className="px-8 h-16 flex items-center justify-between">
             <Link href="/" className="flex items-center gap-2 hover:opacity-70 transition">
-              <h1 className="font-bold text-xl bg-gradient-to-r from-teal-600 to-blue-600 bg-clip-text text-transparent">
+              <h1 className="font-bold text-xl" style={{ color: '#000' }}>
                 EconAI
               </h1>
             </Link>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-4">
+              {essaysRemaining > 0 ? (
+                <div className="px-3 py-1 bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800 rounded-lg flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-teal-600" />
+                  <span className="text-xs font-semibold text-teal-700 dark:text-teal-400">
+                    {essaysRemaining} essay{essaysRemaining !== 1 ? 's' : ''} remaining
+                  </span>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowUpgradeModal(true)}
+                  className="px-4 py-1.5 rounded-lg text-xs font-semibold text-white transition"
+                  style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)' }}
+                >
+                  Upgrade to Pro
+                </button>
+              )}
               <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition">
                 <Settings className="w-5 h-5" />
               </button>
@@ -423,7 +466,7 @@ export default function DashboardPage() {
                         className="w-full p-3 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer font-medium text-sm"
                       >
                         <option value="">Select marks...</option>
-                        <option value="5">5 marks (KAA only)</option>
+                        <option value="5">5 marks</option>
                         <option value="8">8 marks</option>
                         <option value="10">10 marks</option>
                         <option value="15">15 marks</option>
@@ -431,18 +474,12 @@ export default function DashboardPage() {
                         <option value="25">25 marks</option>
                       </select>
                     </div>
-                    {structureGuidance && markAllocation && (
-                      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
-                        <p className="text-xs font-semibold text-blue-900 dark:text-blue-300 mb-1">📋 Recommended Structure:</p>
-                        <p className="text-xs text-blue-800 dark:text-blue-200">{structureGuidance}</p>
-                        <p className="text-xs text-blue-700 dark:text-blue-300 mt-2">💡 Tip: Explain diagrams in [Square brackets]</p>
-                      </div>
-                    )}
                     {isQuestionFilled && (
                       <div className="flex justify-end">
                         <button
                           onClick={() => setQuestionExpanded(false)}
-                          className="px-6 py-2 bg-gradient-to-r from-teal-500 to-blue-500 text-white rounded-lg font-semibold hover:opacity-90 transition text-sm shadow-lg"
+                          className="px-6 py-2 text-white rounded-lg font-semibold hover:opacity-90 transition text-sm shadow-lg"
+                          style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}
                         >
                           Continue
                         </button>
@@ -492,7 +529,8 @@ export default function DashboardPage() {
                         <div className="flex justify-end">
                           <button
                             onClick={() => setExtractExpanded(false)}
-                            className="px-6 py-2 bg-gradient-to-r from-teal-500 to-blue-500 text-white rounded-lg font-semibold hover:opacity-90 transition text-sm"
+                            className="px-6 py-2 text-white rounded-lg font-semibold hover:opacity-90 transition text-sm"
+                            style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}
                           >
                             Done
                           </button>
@@ -526,7 +564,7 @@ export default function DashboardPage() {
                             </button>
                             <button
                               onClick={() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Paste your essay..."]')?.focus()}
-                              className="p-4 rounded-lg border-2 border-dashed border-teal-500 bg-gradient-to-br from-teal-50 to-blue-50 dark:from-teal-900/20 dark:to-blue-900/20 hover:from-teal-100 hover:to-blue-100 transition-all flex flex-col items-center justify-center gap-2"
+                              className="p-4 rounded-lg border-2 border-dashed border-teal-500 bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20 hover:from-teal-100 hover:to-cyan-100 transition-all flex flex-col items-center justify-center gap-2"
                             >
                               <Copy className="w-5 h-5 text-teal-600" />
                               <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">Paste Text</p>
@@ -552,7 +590,8 @@ export default function DashboardPage() {
                               <button
                                 onClick={handleSubmitEssay}
                                 disabled={!essayText || isMarking}
-                                className="px-8 py-3 bg-gradient-to-r from-teal-500 to-blue-500 text-white rounded-lg font-bold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed text-sm flex items-center gap-2 shadow-lg hover:shadow-xl"
+                                className="px-8 py-3 text-white rounded-lg font-bold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed text-sm flex items-center gap-2 shadow-lg hover:shadow-xl"
+                                style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)' }}
                               >
                                 {isMarking ? (
                                   <>
@@ -824,7 +863,8 @@ export default function DashboardPage() {
                     setSelectedHighlight(null)
                     setSelectedChain(null)
                   }}
-                  className="w-full px-4 py-3 bg-gradient-to-r from-teal-500 to-blue-500 text-white rounded-xl font-bold hover:opacity-90 transition text-sm shadow-lg hover:shadow-xl"
+                  className="w-full px-4 py-3 text-white rounded-xl font-bold hover:opacity-90 transition text-sm shadow-lg hover:shadow-xl"
+                  style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}
                 >
                   Submit Another Essay
                 </button>
@@ -834,12 +874,65 @@ export default function DashboardPage() {
         </main>
       </div>
 
+      {/* Upgrade Modal */}
+      {showUpgradeModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setShowUpgradeModal(false)}>
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full p-8 border-2 border-teal-500" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}>
+                <AlertCircle className="w-8 h-8 text-white" />
+              </div>
+              <h3 className="text-2xl font-bold text-foreground mb-2">Free Trial Complete!</h3>
+              <p className="text-foreground/60">You've used all 3 of your free essays. Upgrade to Pro for unlimited marking.</p>
+            </div>
+            
+            <div className="bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-900/20 dark:to-teal-900/30 rounded-xl p-6 mb-6 border border-teal-200 dark:border-teal-800">
+              <p className="text-sm font-bold text-foreground mb-3">Pro Includes:</p>
+              <ul className="space-y-2 text-sm text-foreground/70">
+                <li className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-teal-600" />
+                  <span>Unlimited essays</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-teal-600" />
+                  <span>Full interactive feedback</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-teal-600" />
+                  <span>Smart improvements</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-teal-600" />
+                  <span>Model answers</span>
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowUpgradeModal(false)}
+                className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-700 text-foreground rounded-lg font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition"
+              >
+                Maybe Later
+              </button>
+              <button
+                onClick={() => router.push('/#pricing')}
+                className="flex-1 px-4 py-3 text-white rounded-lg font-semibold hover:opacity-90 transition shadow-lg"
+                style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}
+              >
+                Upgrade Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Loading Overlay */}
       {isMarking && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]">
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
             <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-gradient-to-r from-teal-500 to-blue-500 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse" style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}>
                 <Loader2 className="w-8 h-8 text-white animate-spin" />
               </div>
               <h3 className="text-xl font-bold text-foreground mb-2">Marking Your Essay</h3>
@@ -848,8 +941,11 @@ export default function DashboardPage() {
             <div className="space-y-3">
               <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-teal-500 to-blue-500 transition-all duration-500 rounded-full"
-                  style={{ width: `${markingProgress}%` }}
+                  className="h-full transition-all duration-500 rounded-full"
+                  style={{ 
+                    width: `${markingProgress}%`,
+                    background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)'
+                  }}
                 />
               </div>
               <p className="text-xs text-center text-foreground/60">{Math.round(markingProgress)}% complete</p>
@@ -860,7 +956,7 @@ export default function DashboardPage() {
                 <span>Analyzing knowledge & understanding...</span>
               </div>
               <div className="flex items-center gap-2 text-xs text-foreground/50">
-                <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse"></div>
+                <div className="w-1.5 h-1.5 bg-teal-500 rounded-full animate-pulse"></div>
                 <span>Identifying chains of analysis...</span>
               </div>
               <div className="flex items-center gap-2 text-xs text-foreground/50">
@@ -917,7 +1013,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="mt-4 flex justify-end">
-              <button onClick={() => setSelectedHighlight(null)} className="px-4 py-2 bg-teal-500 text-white rounded-lg text-sm font-semibold hover:opacity-90 transition">
+              <button onClick={() => setSelectedHighlight(null)} className="px-4 py-2 text-white rounded-lg text-sm font-semibold hover:opacity-90 transition" style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}>
                 Got it
               </button>
             </div>

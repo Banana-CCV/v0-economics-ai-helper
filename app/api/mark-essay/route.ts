@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { markEssay } from '@/lib/ai/openai';
+import { markEssay } from '@/lib/openai';
 
 export async function POST(request: Request) {
   try {
@@ -33,6 +33,7 @@ export async function POST(request: Request) {
 
     // Call OpenAI to mark the essay
     const result = await markEssay(question, Number(marks), essay, extractText);
+
     console.log('Marking complete. Score:', result.overallMark, '/', result.totalMarks);
 
     // Save result to database
@@ -67,7 +68,6 @@ export async function POST(request: Request) {
       result,
       feedbackId: feedback.id,
     });
-
   } catch (error) {
     console.error('API Error:', error);
     return NextResponse.json(
