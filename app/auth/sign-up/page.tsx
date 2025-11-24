@@ -3,14 +3,15 @@
 import type React from "react"
 
 import { createClient } from "@/lib/supabase/client"
+import { checkDeviceEligibility, registerDevice } from "@/lib/device-tracking"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useState } from "react"
-import { Mail } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Mail, AlertCircle } from "lucide-react"
 
 export default function SignUpPage() {
   const [email, setEmail] = useState("")
@@ -18,10 +19,28 @@ export default function SignUpPage() {
   const [repeatPassword, setRepeatPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [deviceEligible, setDeviceEligible] = useState(true)
   const router = useRouter()
+
+  useEffect(() => {
+    const checkDevice = async () => {
+      const result = await checkDeviceEligibility()
+      setDeviceEligible(result.eligible)
+      if (!result.eligible) {
+        setError(result.reason || 'Device not eligible')
+      }
+    }
+    checkDevice()
+  }, [])
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+    if (!deviceEligible) {
+      setError("This device has already been used for a free account. Please sign in.")
+      return
+    }
+    
     const supabase = createClient()
     setIsLoading(true)
     setError(null)
@@ -33,14 +52,20 @@ export default function SignUpPage() {
     }
 
     try {
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           emailRedirectTo: `${window.location.origin}/auth/callback`,
         },
       })
+      
       if (error) throw error
+      
+      if (data.user) {
+        await registerDevice(data.user.id)
+      }
+      
       router.push("/auth/sign-up-success")
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred")
@@ -50,6 +75,11 @@ export default function SignUpPage() {
   }
 
   const handleGoogleSignUp = async () => {
+    if (!deviceEligible) {
+      setError("This device has already been used for a free account. Please sign in.")
+      return
+    }
+    
     const supabase = createClient()
     setIsLoading(true)
     setError(null)
@@ -59,6 +89,10 @@ export default function SignUpPage() {
         provider: "google",
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          }
         },
       })
       if (error) throw error
@@ -78,6 +112,18 @@ export default function SignUpPage() {
               <CardDescription>Join EconAI and start improving your economics grades</CardDescription>
             </CardHeader>
             <CardContent>
+              {!deviceEligible && (
+                <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-amber-800 dark:text-amber-200">
+                    This device has already been used for a free trial. Please{" "}
+                    <Link href="/auth/login" className="font-semibold underline">sign in</Link>
+                    {" "}or{" "}
+                    <Link href="/#pricing" className="font-semibold underline">upgrade to Pro</Link>.
+                  </div>
+                </div>
+              )}
+              
               <form onSubmit={handleSignUp}>
                 <div className="flex flex-col gap-6">
                   <div className="grid gap-2">
@@ -89,6 +135,7 @@ export default function SignUpPage() {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
+                      disabled={isLoading || !deviceEligible}
                     />
                   </div>
                   <div className="grid gap-2">
@@ -99,6 +146,7 @@ export default function SignUpPage() {
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      disabled={isLoading || !deviceEligible}
                     />
                   </div>
                   <div className="grid gap-2">
@@ -109,10 +157,15 @@ export default function SignUpPage() {
                       required
                       value={repeatPassword}
                       onChange={(e) => setRepeatPassword(e.target.value)}
+                      disabled={isLoading || !deviceEligible}
                     />
                   </div>
                   {error && <p className="text-sm text-red-500">{error}</p>}
-                  <Button type="submit" className="w-full bg-teal-accent hover:opacity-90" disabled={isLoading}>
+                  <Button 
+                    type="submit" 
+                    className="w-full bg-teal-accent hover:opacity-90" 
+                    disabled={isLoading || !deviceEligible}
+                  >
                     {isLoading ? "Creating account..." : "Create Account"}
                   </Button>
                 </div>
@@ -130,9 +183,10 @@ export default function SignUpPage() {
 
                 <Button
                   onClick={handleGoogleSignUp}
+                  type="button"
                   variant="outline"
                   className="w-full mt-4 border-teal-light/30 hover:bg-teal-light/5 bg-transparent"
-                  disabled={isLoading}
+                  disabled={isLoading || !deviceEligible}
                 >
                   <Mail className="mr-2 h-4 w-4" />
                   Google

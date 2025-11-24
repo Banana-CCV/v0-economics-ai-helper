@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { LogOut, Settings, FileUp, Copy, Camera, ChevronRight, Loader2, X, Clock, TrendingUp, BookOpen, Zap, AlertCircle } from "lucide-react"
+import { LogOut, Settings, FileUp, Copy, Camera, ChevronRight, Loader2, X, Clock, TrendingUp, BookOpen, Zap, AlertCircle, ChevronDown, ChevronUp, Sparkles, ThumbsUp, ThumbsDown, MessageSquare } from "lucide-react"
 import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
 import type { ReactElement } from "react"
@@ -23,7 +23,7 @@ interface EssayData {
 interface SentenceHighlight {
   text: string
   quality: 'strong' | 'adequate' | 'weak'
-  ao: string
+  role: string
   feedback: string
   chainId?: number
 }
@@ -33,6 +33,13 @@ interface AnalysisChain {
   chain: string[]
   quality: 'strong' | 'adequate' | 'weak'
   feedback: string
+}
+
+interface SentenceRewrite {
+  rewrittenText: string
+  improvementType: string
+  explanation: string
+  impactOnMark: string
 }
 
 const getAOsForMarks = (marks: number | "") => {
@@ -45,18 +52,6 @@ const getAOsForMarks = (marks: number | "") => {
     25: { knowledge: 5, application: 4, analysis: 6, evaluation: 10 },
   }
   return marks && marks in aoMap ? aoMap[marks as number] : null
-}
-
-const getStructureGuidance = (marks: number) => {
-  const guidance: Record<number, string> = {
-    25: "6 paragraphs: Intro (define terms) → KAA 1 (5+ chains) → Eval 1 → KAA 2 (5+ chains) → Eval 2 → Conclusion (justified judgement)",
-    20: "5 paragraphs: Intro → 2 KAA (deep analysis) → 2 Evaluation → Conclusion",
-    15: "4 paragraphs: Brief intro → 2 deep KAA → 2 Evaluation",
-    10: "3-4 paragraphs: 2 KAA → 2 short Evaluation",
-    8: "3 paragraphs: 2 KAA → 1 Evaluation",
-    5: "1-2 paragraphs: KAA only (no evaluation needed)",
-  }
-  return guidance[marks] || "Standard essay structure"
 }
 
 export default function DashboardPage() {
@@ -79,6 +74,15 @@ export default function DashboardPage() {
   const [markingProgress, setMarkingProgress] = useState(0)
   const [essaysRemaining, setEssaysRemaining] = useState(3)
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+  
+  // NEW STATES
+  const [extractVisible, setExtractVisible] = useState(true)
+  const [rewritingText, setRewritingText] = useState<string | null>(null)
+  const [rewrittenSentences, setRewrittenSentences] = useState<Map<string, SentenceRewrite>>(new Map())
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false)
+  const [feedbackType, setFeedbackType] = useState<'positive' | 'negative' | null>(null)
+  const [feedbackText, setFeedbackText] = useState("")
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false)
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -151,7 +155,6 @@ export default function DashboardPage() {
       return
     }
 
-    // Check AFTER they click - show modal instead of blocking
     if (essaysRemaining <= 0) {
       setShowUpgradeModal(true)
       return
@@ -231,6 +234,7 @@ export default function DashboardPage() {
       })
 
       setHasEssay(true)
+      setExtractVisible(true)
       await loadRecentEssays()
       await checkEssayCount()
     } catch (error) {
@@ -281,6 +285,7 @@ export default function DashboardPage() {
           createdAt: new Date(essayData.created_at),
         })
         setHasEssay(true)
+        setExtractVisible(true)
       }
     } catch (error) {
       console.error('Failed to load essay:', error)
@@ -288,9 +293,79 @@ export default function DashboardPage() {
     }
   }
 
+  const handleRewriteSentence = async (sentence: SentenceHighlight) => {
+    if (rewrittenSentences.has(sentence.text)) {
+      setSelectedHighlight({ ...sentence })
+      return
+    }
+
+    setRewritingText(sentence.text)
+
+    try {
+      const response = await fetch('/api/rewrite-sentence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sentence: sentence.text,
+          context: essayText,
+          question: essay?.questionText,
+          feedback: sentence.feedback,
+          role: sentence.role,
+          marks: essay?.markAllocation,
+        }),
+      })
+
+      if (!response.ok) throw new Error('Failed to rewrite sentence')
+
+      const data = await response.json()
+      const rewrite: SentenceRewrite = data.result
+
+      setRewrittenSentences(prev => new Map(prev).set(sentence.text, rewrite))
+      setSelectedHighlight({ ...sentence })
+    } catch (error) {
+      console.error('Rewrite error:', error)
+      alert('Failed to rewrite sentence')
+    } finally {
+      setRewritingText(null)
+    }
+  }
+
+  const handleSubmitFeedback = async () => {
+    if (!feedbackType) return
+
+    try {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+
+      await supabase.from('feedback').insert({
+        user_id: user?.id,
+        essay_id: essay?.id,
+        feedback_type: feedbackType === 'positive' ? 'general' : 'bug',
+        message: feedbackText || (feedbackType === 'positive' ? 'Positive feedback' : 'Needs improvement'),
+        created_at: new Date().toISOString(),
+      })
+
+      setFeedbackSubmitted(true)
+      setTimeout(() => {
+        setShowFeedbackModal(false)
+        setFeedbackType(null)
+        setFeedbackText("")
+        setFeedbackSubmitted(false)
+      }, 2000)
+    } catch (error) {
+      console.error('Feedback error:', error)
+    }
+  }
+
   const renderHighlightedEssay = () => {
     if (!essay?.markingResult?.sentenceHighlights || essay.markingResult.sentenceHighlights.length === 0) {
-      return <p className="text-foreground/80 leading-relaxed whitespace-pre-wrap">{essay?.essayText}</p>
+      return (
+        <div className="text-foreground/80 leading-relaxed space-y-4">
+          {essay?.essayText.split('\n\n').map((para, i) => (
+            <p key={i}>{para}</p>
+          ))}
+        </div>
+      )
     }
 
     const highlights = essay.markingResult.sentenceHighlights
@@ -318,17 +393,20 @@ export default function DashboardPage() {
         elements.push(
           <span
             key={`highlight-${keyIndex++}`}
-            className={`${colorClass} cursor-pointer transition-all rounded-sm px-0.5 relative group`}
+            className={`${colorClass} cursor-pointer transition-all rounded-sm px-1 py-0.5 relative group inline`}
             onClick={() => setSelectedHighlight(highlight)}
           >
+            {highlight.quality === 'weak' && (
+              <Sparkles className="inline-block w-3 h-3 text-purple-500 mr-1 animate-pulse" />
+            )}
             {highlight.text}
             {highlight.chainId && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-blue-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+              <span className="inline-block ml-1 px-1.5 py-0.5 bg-blue-500 text-white text-[10px] font-bold rounded-full align-middle">
                 {highlight.chainId}
               </span>
             )}
             <span className="absolute -top-8 left-0 bg-gray-900 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
-              {highlight.ao} - Click for details
+              {highlight.role} {highlight.quality === 'weak' && '→ Click to rewrite'}
             </span>
           </span>
         )
@@ -345,16 +423,15 @@ export default function DashboardPage() {
       )
     }
 
-    return <div className="leading-relaxed">{elements}</div>
+    return <div className="leading-relaxed space-y-4">{elements}</div>
   }
 
   const currentAOs = getAOsForMarks(markAllocation)
   const isQuestionFilled = questionText && markAllocation
-  const structureGuidance = markAllocation ? getStructureGuidance(Number(markAllocation)) : ""
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-teal-50/30 via-cyan-50/20 to-gray-50 dark:from-gray-900 dark:to-gray-800 flex">
-      {/* SIDEBAR - TEAL WITH TOUCH OF BLUE */}
+      {/* SIDEBAR */}
       <div
         className={`fixed left-0 top-0 bottom-0 z-30 transition-all duration-300 ${sidebarOpen ? "w-72" : "w-16"} shadow-2xl`}
         style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)' }}
@@ -429,6 +506,17 @@ export default function DashboardPage() {
                   Upgrade to Pro
                 </button>
               )}
+              
+              {hasEssay && (
+                <button
+                  onClick={() => setShowFeedbackModal(true)}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition"
+                  title="Send feedback"
+                >
+                  <MessageSquare className="w-5 h-5" />
+                </button>
+              )}
+              
               <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition">
                 <Settings className="w-5 h-5" />
               </button>
@@ -680,8 +768,28 @@ export default function DashboardPage() {
                 
                 {essay?.extractText && (
                   <div className="rounded-xl border border-border bg-white dark:bg-gray-900 shadow-lg p-4">
-                    <h3 className="text-sm font-semibold mb-2 text-foreground/70">Extract / Case Study</h3>
-                    <p className="text-sm text-foreground/70 italic">{essay.extractText}</p>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-sm font-semibold text-foreground/70">Extract / Case Study</h3>
+                      <button
+                        onClick={() => setExtractVisible(!extractVisible)}
+                        className="flex items-center gap-1 text-xs font-semibold text-teal-600 hover:text-teal-700 transition"
+                      >
+                        {extractVisible ? (
+                          <>
+                            <ChevronUp className="w-4 h-4" />
+                            Hide Extract
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="w-4 h-4" />
+                            Show Extract
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    {extractVisible && (
+                      <p className="text-sm text-foreground/70 italic">{essay.extractText}</p>
+                    )}
                   </div>
                 )}
 
@@ -714,7 +822,7 @@ export default function DashboardPage() {
                               {chain.chain.length} links
                             </span>
                           </div>
-                          <div className="flex items-center gap-2 text-xs text-foreground/70">
+                          <div className="flex items-center gap-2 text-xs text-foreground/70 flex-wrap">
                             {chain.chain.map((link, idx) => (
                               <span key={idx} className="flex items-center gap-1">
                                 <span className="font-medium">{link}</span>
@@ -744,6 +852,10 @@ export default function DashboardPage() {
                         <div className="w-3 h-3 bg-red-500 rounded"></div>
                         <span className="text-foreground/60">Weak</span>
                       </div>
+                      <div className="flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-purple-500" />
+                        <span className="text-foreground/60">Can rewrite</span>
+                      </div>
                     </div>
                   </div>
                   
@@ -753,8 +865,17 @@ export default function DashboardPage() {
                     {essay?.essayText.split(/\s+/).filter(Boolean).length} words • Click highlighted text for feedback
                   </p>
                 </div>
+
+                <button
+                  onClick={() => setShowFeedbackModal(true)}
+                  className="w-full px-4 py-3 border-2 border-teal-500 text-teal-700 dark:text-teal-300 rounded-xl font-semibold hover:bg-teal-50 dark:hover:bg-teal-900/20 transition text-sm flex items-center justify-center gap-2"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  Give Feedback on This Marking
+                </button>
               </div>
 
+              {/* Right sidebar - Scores */}
               <div className="space-y-4">
                 <div className="rounded-xl border border-purple-200 dark:border-purple-800 bg-gradient-to-br from-purple-500/10 to-purple-600/10 backdrop-blur p-6 shadow-lg">
                   <p className="text-xs font-bold uppercase text-foreground/60 mb-2">Estimated Grade</p>
@@ -874,7 +995,7 @@ export default function DashboardPage() {
         </main>
       </div>
 
-      {/* Upgrade Modal */}
+      {/* Modals */}
       {showUpgradeModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setShowUpgradeModal(false)}>
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full p-8 border-2 border-teal-500" onClick={(e) => e.stopPropagation()}>
@@ -927,7 +1048,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Loading Overlay */}
       {isMarking && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]">
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
@@ -968,10 +1088,9 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Sentence Feedback Popup */}
       {selectedHighlight && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setSelectedHighlight(null)}>
-          <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl max-w-2xl w-full p-6 border-2 border-teal-500" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl max-w-2xl w-full p-6 border-2 border-teal-500 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3">
                 <span className={`px-3 py-1 rounded-lg text-sm font-bold ${
@@ -979,7 +1098,7 @@ export default function DashboardPage() {
                   selectedHighlight.quality === 'adequate' ? 'bg-yellow-500 text-white' :
                   'bg-red-500 text-white'
                 }`}>
-                  {selectedHighlight.ao}
+                  {selectedHighlight.role}
                 </span>
                 <span className={`text-xs font-semibold uppercase ${
                   selectedHighlight.quality === 'strong' ? 'text-green-600' :
@@ -1007,21 +1126,93 @@ export default function DashboardPage() {
               <p className="text-sm text-foreground italic leading-relaxed">"{selectedHighlight.text}"</p>
             </div>
 
-            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4">
+            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 mb-4">
               <p className="text-xs font-semibold text-foreground/60 uppercase mb-2">Feedback</p>
               <p className="text-sm text-foreground leading-relaxed">{selectedHighlight.feedback}</p>
             </div>
 
+            {selectedHighlight.quality === 'weak' && (
+              <div className="border-t border-border pt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-purple-500" />
+                    <h4 className="text-sm font-bold text-foreground">AI Rewrite Suggestion</h4>
+                  </div>
+                  {!rewrittenSentences.has(selectedHighlight.text) && (
+                    <button
+                      onClick={() => handleRewriteSentence(selectedHighlight)}
+                      disabled={rewritingText === selectedHighlight.text}
+                      className="px-4 py-2 bg-purple-500 text-white rounded-lg text-xs font-semibold hover:bg-purple-600 transition disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {rewritingText === selectedHighlight.text ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          Rewriting...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3 h-3" />
+                          Generate Rewrite
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {rewrittenSentences.has(selectedHighlight.text) && (
+                  <div className="space-y-3">
+                    <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-3 border border-red-200 dark:border-red-800">
+                      <p className="text-xs font-semibold text-red-700 dark:text-red-400 mb-1">Original:</p>
+                      <p className="text-sm text-foreground">{selectedHighlight.text}</p>
+                    </div>
+                    
+                    <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 border border-green-200 dark:border-green-800">
+                      <p className="text-xs font-semibold text-green-700 dark:text-green-400 mb-1">Improved Version:</p>
+                      <p className="text-sm text-foreground font-medium">{rewrittenSentences.get(selectedHighlight.text)?.rewrittenText}</p>
+                    </div>
+
+                    <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-3 border border-purple-200 dark:border-purple-800">
+                      <div className="flex items-start gap-2 mb-2">
+                        <Sparkles className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <p className="text-xs font-semibold text-purple-700 dark:text-purple-400 mb-1">Why this is better:</p>
+                          <p className="text-sm text-foreground">{rewrittenSentences.get(selectedHighlight.text)?.explanation}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between mt-3 pt-3 border-t border-purple-200 dark:border-purple-800">
+                        <span className="text-xs text-purple-700 dark:text-purple-400 font-semibold">
+                          Improvement type: {rewrittenSentences.get(selectedHighlight.text)?.improvementType}
+                        </span>
+                        <span className="px-2 py-1 bg-purple-500 text-white text-xs font-bold rounded">
+                          {rewrittenSentences.get(selectedHighlight.text)?.impactOnMark}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(rewrittenSentences.get(selectedHighlight.text)?.rewrittenText || '')
+                        alert('Copied to clipboard!')
+                      }}
+                      className="w-full px-4 py-2 border-2 border-purple-500 text-purple-700 dark:text-purple-300 rounded-lg text-sm font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition flex items-center justify-center gap-2"
+                    >
+                      <Copy className="w-4 h-4" />
+                      Copy Improved Version
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="mt-4 flex justify-end">
               <button onClick={() => setSelectedHighlight(null)} className="px-4 py-2 text-white rounded-lg text-sm font-semibold hover:opacity-90 transition" style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}>
-                Got it
+                Close
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Chain Feedback Popup */}
       {selectedChain && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setSelectedChain(null)}>
           <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl max-w-3xl w-full p-6 border-2 border-blue-500" onClick={(e) => e.stopPropagation()}>
@@ -1065,9 +1256,88 @@ export default function DashboardPage() {
 
             <div className="mt-4 flex justify-end">
               <button onClick={() => setSelectedChain(null)} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-semibold hover:opacity-90 transition">
-                Got it
+                Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showFeedbackModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setShowFeedbackModal(false)}>
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full p-6 border-2 border-teal-500" onClick={(e) => e.stopPropagation()}>
+            {!feedbackSubmitted ? (
+              <>
+                <div className="text-center mb-6">
+                  <h3 className="text-2xl font-bold text-foreground mb-2">How was the marking?</h3>
+                  <p className="text-foreground/60">Your feedback helps us improve</p>
+                </div>
+
+                <div className="flex gap-4 mb-6">
+                  <button
+                    onClick={() => setFeedbackType('positive')}
+                    className={`flex-1 p-4 rounded-xl border-2 transition ${
+                      feedbackType === 'positive'
+                        ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-green-300'
+                    }`}
+                  >
+                    <ThumbsUp className={`w-8 h-8 mx-auto mb-2 ${feedbackType === 'positive' ? 'text-green-600' : 'text-gray-400'}`} />
+                    <p className="text-sm font-semibold text-center">Good</p>
+                  </button>
+                  <button
+                    onClick={() => setFeedbackType('negative')}
+                    className={`flex-1 p-4 rounded-xl border-2 transition ${
+                      feedbackType === 'negative'
+                        ? 'border-red-500 bg-red-50 dark:bg-red-900/20'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-red-300'
+                    }`}
+                  >
+                    <ThumbsDown className={`w-8 h-8 mx-auto mb-2 ${feedbackType === 'negative' ? 'text-red-600' : 'text-gray-400'}`} />
+                    <p className="text-sm font-semibold text-center">Could be better</p>
+                  </button>
+                </div>
+
+                {feedbackType && (
+                  <>
+                    <textarea
+                      value={feedbackText}
+                      onChange={(e) => setFeedbackText(e.target.value)}
+                      placeholder="Tell us more... (optional)"
+                      className="w-full p-3 rounded-lg border border-border bg-background text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-teal-500 min-h-24 text-sm mb-4"
+                    />
+
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => {
+                          setShowFeedbackModal(false)
+                          setFeedbackType(null)
+                          setFeedbackText("")
+                        }}
+                        className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-700 text-foreground rounded-lg font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSubmitFeedback}
+                        className="flex-1 px-4 py-3 text-white rounded-lg font-semibold hover:opacity-90 transition shadow-lg"
+                        style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}
+                      >
+                        Submit Feedback
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-8">
+                <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <ThumbsUp className="w-8 h-8 text-green-600" />
+                </div>
+                <h3 className="text-xl font-bold text-foreground mb-2">Thank you!</h3>
+                <p className="text-foreground/60">Your feedback has been submitted</p>
+              </div>
+            )}
           </div>
         </div>
       )}

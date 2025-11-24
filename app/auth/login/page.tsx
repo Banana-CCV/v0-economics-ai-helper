@@ -1,7 +1,8 @@
+// app/auth/login/page.tsx - Updated Google login handler
+
 "use client"
 
 import type React from "react"
-
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -45,13 +46,23 @@ export default function LoginPage() {
     setError(null)
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      // Get the current origin for the redirect
+      const redirectUrl = `${window.location.origin}/auth/callback`
+      
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: redirectUrl,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          }
         },
       })
+      
       if (error) throw error
+      
+      // The user will be redirected to Google, so we don't need to handle anything else here
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred")
       setIsLoading(false)
@@ -79,6 +90,7 @@ export default function LoginPage() {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
+                      disabled={isLoading}
                     />
                   </div>
                   <div className="grid gap-2">
@@ -89,6 +101,7 @@ export default function LoginPage() {
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      disabled={isLoading}
                     />
                   </div>
                   {error && <p className="text-sm text-red-500">{error}</p>}
@@ -110,6 +123,7 @@ export default function LoginPage() {
 
                 <Button
                   onClick={handleGoogleLogin}
+                  type="button"
                   variant="outline"
                   className="w-full mt-4 border-teal-light/30 hover:bg-teal-light/5 bg-transparent"
                   disabled={isLoading}
