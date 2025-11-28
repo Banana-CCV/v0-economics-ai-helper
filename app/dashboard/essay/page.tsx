@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { LogOut, Settings, FileUp, Copy, Camera, ChevronRight, Loader2, X, Clock, TrendingUp, BookOpen, Zap, AlertCircle, ChevronDown, ChevronUp, Sparkles, ThumbsUp, ThumbsDown, MessageSquare } from "lucide-react"
+import { LogOut, Settings, FileUp, Copy, Camera, ChevronRight, Loader2, X, Clock, TrendingUp, BookOpen, Zap, AlertCircle, ChevronDown, ChevronUp, Sparkles, ThumbsUp, ThumbsDown, MessageSquare, Pin, Trash2 } from "lucide-react"
 import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
 import type { ReactElement } from "react"
@@ -18,6 +18,13 @@ interface EssayData {
   aoScores?: { ao1: number; ao2: number; ao3: number; ao4: number }
   markingResult?: any
   createdAt?: Date
+  isPinned?: boolean
+}
+
+interface UserSubscription {
+  isPremium: boolean
+  plan?: 'free' | 'monthly' | 'annual'
+  essaysRemaining: number
 }
 
 interface SentenceHighlight {
@@ -74,6 +81,12 @@ export default function DashboardPage() {
   const [markingProgress, setMarkingProgress] = useState(0)
   const [essaysRemaining, setEssaysRemaining] = useState(3)
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+  const [subscription, setSubscription] = useState<UserSubscription>({
+    isPremium: false,
+    plan: 'free',
+    essaysRemaining: 3
+  })
+  const [showRewriteUpgrade, setShowRewriteUpgrade] = useState(false)
   
   // NEW STATES
   const [extractVisible, setExtractVisible] = useState(true)
@@ -83,19 +96,65 @@ export default function DashboardPage() {
   const [feedbackType, setFeedbackType] = useState<'positive' | 'negative' | null>(null)
   const [feedbackText, setFeedbackText] = useState("")
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false)
+  const [showAlert, setShowAlert] = useState(false)
+  const [alertMessage, setAlertMessage] = useState("")
+  const [alertTitle, setAlertTitle] = useState("")
 
   useEffect(() => {
     const checkAuth = async () => {
       const supabase = createClient()
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) router.push("/auth/login")
-      else {
-        loadRecentEssays()
-        checkEssayCount()
+      if (!user) {
+        router.push("/auth/login")
+      } else {
+        await checkSubscriptionStatus()
+        await loadRecentEssays()
       }
     }
     checkAuth()
   }, [router])
+
+  const checkSubscriptionStatus = async () => {
+    try {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      // Check profiles table for is_premium flag first
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('is_premium')
+        .eq('id', user.id)
+        .single()
+
+      // If user is premium according to profiles table
+      if (!profileError && profileData?.is_premium) {
+        setSubscription({
+          isPremium: true,
+          plan: 'monthly',
+          essaysRemaining: -1
+        })
+        setEssaysRemaining(-1)
+        return
+      }
+
+      // Otherwise check essay count for free tier
+      const { count } = await supabase
+        .from('essays')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+
+      const remaining = Math.max(0, 3 - (count || 0))
+      setSubscription({
+        isPremium: false,
+        plan: 'free',
+        essaysRemaining: remaining
+      })
+      setEssaysRemaining(remaining)
+    } catch (error) {
+      console.error('Failed to check subscription:', error)
+    }
+  }
 
   const checkEssayCount = async () => {
     try {
@@ -135,6 +194,7 @@ export default function DashboardPage() {
           markAllocation: e.mark_allocation || 25,
           essayText: '',
           isMarked: e.is_marked || false,
+          isPinned: false, // Default to false for now
           createdAt: new Date(e.created_at),
         })))
       }
@@ -155,7 +215,8 @@ export default function DashboardPage() {
       return
     }
 
-    if (essaysRemaining <= 0) {
+    // Only check essay limit if user is not premium
+    if (!subscription.isPremium && essaysRemaining <= 0) {
       setShowUpgradeModal(true)
       return
     }
@@ -293,6 +354,46 @@ export default function DashboardPage() {
     }
   }
 
+  const togglePinEssay = async (essayId: string) => {
+    try {
+      const supabase = createClient()
+      const essay = recentEssays.find(e => e.id === essayId)
+      
+      // Check if column exists first
+      const { error } = await supabase
+        .from('essays')
+        .update({ is_pinned: !essay?.isPinned })
+        .eq('id', essayId)
+      
+      if (error) {
+        console.log('Pin feature not available yet - database column missing')
+        alert('Pin feature coming soon! Database needs to be updated.')
+        return
+      }
+      
+      await loadRecentEssays()
+    } catch (error) {
+      console.error('Failed to pin essay:', error)
+    }
+  }
+
+  const deleteEssay = async (essayId: string) => {
+    if (!confirm('Are you sure you want to delete this essay?')) return
+    
+    try {
+      const supabase = createClient()
+      await supabase
+        .from('essays')
+        .delete()
+        .eq('id', essayId)
+      
+      await loadRecentEssays()
+    } catch (error) {
+      console.error('Failed to delete essay:', error)
+      alert('Failed to delete essay')
+    }
+  }
+
   const handleRewriteSentence = async (sentence: SentenceHighlight) => {
     if (rewrittenSentences.has(sentence.text)) {
       setSelectedHighlight({ ...sentence })
@@ -357,6 +458,12 @@ export default function DashboardPage() {
     }
   }
 
+  const showCustomAlert = (title: string, message: string) => {
+    setAlertTitle(title)
+    setAlertMessage(message)
+    setShowAlert(true)
+  }
+
   const renderHighlightedEssay = () => {
     if (!essay?.markingResult?.sentenceHighlights || essay.markingResult.sentenceHighlights.length === 0) {
       return (
@@ -396,7 +503,7 @@ export default function DashboardPage() {
             className={`${colorClass} cursor-pointer transition-all rounded-sm px-1 py-0.5 relative group inline`}
             onClick={() => setSelectedHighlight(highlight)}
           >
-            {highlight.quality === 'weak' && (
+            {highlight.quality === 'weak' && subscription.isPremium &&(
               <Sparkles className="inline-block w-3 h-3 text-purple-500 mr-1 animate-pulse" />
             )}
             {highlight.text}
@@ -439,49 +546,113 @@ export default function DashboardPage() {
         onMouseLeave={() => setSidebarOpen(false)}
       >
         <div className="h-full flex flex-col p-4">
-          <div className="mb-6 flex items-center gap-3">
+          {/* Logo/Header */}
+          <button 
+            onClick={() => router.push('/dashboard/home')}
+            className="mb-6 flex items-center gap-3 hover:opacity-80 transition w-full"
+          >
             <div className="w-10 h-10 bg-white/20 backdrop-blur rounded-lg flex items-center justify-center shrink-0">
               <TrendingUp className="w-6 h-6 text-white" />
             </div>
             {sidebarOpen && (
-              <span className="text-white font-bold text-lg whitespace-nowrap">Recent Essays</span>
+              <span className="text-white font-bold text-lg whitespace-nowrap">EconAI</span>
+            )}
+          </button>
+
+          {/* New Essay Button */}
+          {sidebarOpen && (
+            <button
+              onClick={() => {
+                setHasEssay(false)
+                setEssay(null)
+                setQuestionText("")
+                setMarkAllocation("")
+                setExtractText("")
+                setEssayText("")
+                setQuestionExpanded(true)
+                setExtractExpanded(false)
+                setEssayExpanded(false)
+                setSelectedHighlight(null)
+                setSelectedChain(null)
+              }}
+              className="w-full mb-4 px-4 py-3 bg-white/20 hover:bg-white/30 backdrop-blur rounded-lg transition flex items-center gap-2 text-white font-semibold text-sm"
+            >
+              <ChevronRight className="w-4 h-4" />
+              New Essay
+            </button>
+          )}
+
+          {/* Recent Essays */}
+          <div className="flex-1 overflow-y-auto mb-4">
+            {sidebarOpen ? (
+              <div>
+                <p className="text-white/70 text-xs font-semibold mb-3 uppercase tracking-wide">Recent Essays</p>
+                {recentEssays.length > 0 ? (
+                  <div className="space-y-2">
+                    {recentEssays.map((e) => (
+                      <div key={e.id} className="group relative">
+                        <button
+                          onClick={() => loadPreviousEssay(e.id)}
+                          className="w-full p-3 rounded-lg bg-white/10 hover:bg-white/20 backdrop-blur transition text-left flex items-start gap-2"
+                        >
+                          {e.isPinned && (
+                            <Pin className="w-3.5 h-3.5 text-yellow-300 shrink-0 mt-0.5 rotate-45" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-white text-xs font-medium truncate mb-1">
+                              {e.questionText.substring(0, 60)}...
+                            </p>
+                            <div className="flex items-center justify-between text-xs text-white/70">
+                              <span>{e.markAllocation}M</span>
+                              <span>{e.createdAt?.toLocaleDateString()}</span>
+                            </div>
+                          </div>
+                        </button>
+                        {/* Pin/Delete buttons - push content left when visible */}
+                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-all duration-200 flex gap-1.5">
+                          <button
+                            onClick={(ev) => {
+                              ev.stopPropagation()
+                              togglePinEssay(e.id)
+                            }}
+                            className={`p-2 rounded-lg backdrop-blur-md transition-all duration-200 transform hover:scale-110 ${
+                              e.isPinned 
+                                ? 'bg-yellow-500/90 hover:bg-yellow-500 shadow-lg shadow-yellow-500/50' 
+                                : 'bg-white/20 hover:bg-white/30'
+                            }`}
+                            title={e.isPinned ? "Unpin essay" : "Pin to top"}
+                          >
+                            <Pin className={`w-3.5 h-3.5 text-white transition-transform duration-200 ${e.isPinned ? 'rotate-45' : ''}`} />
+                          </button>
+                          <button
+                            onClick={(ev) => {
+                              ev.stopPropagation()
+                              deleteEssay(e.id)
+                            }}
+                            className="p-2 rounded-lg backdrop-blur-md bg-white/20 hover:bg-red-500/90 transition-all duration-200 transform hover:scale-110 group/delete"
+                            title="Delete essay"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-white transition-transform duration-200 group-hover/delete:scale-110" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-white/60 text-sm text-center py-4">No essays yet</p>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-4">
+                <Clock className="w-5 h-5 text-white/60" />
+              </div>
             )}
           </div>
-
-          <div className="flex-1 overflow-y-auto">
-            {sidebarOpen && recentEssays.length > 0 ? (
-              <div className="space-y-2">
-                {recentEssays.map((e) => (
-                  <button
-                    key={e.id}
-                    onClick={() => loadPreviousEssay(e.id)}
-                    className="w-full p-3 rounded-lg bg-white/10 hover:bg-white/20 backdrop-blur transition text-left group"
-                  >
-                    <p className="text-white text-xs font-medium truncate mb-1">
-                      {e.questionText.substring(0, 60)}...
-                    </p>
-                    <div className="flex items-center justify-between text-xs text-white/70">
-                      <span>{e.markAllocation}M</span>
-                      <span>{e.createdAt?.toLocaleDateString()}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : sidebarOpen ? (
-              <p className="text-white/60 text-sm text-center py-4">No essays yet</p>
-            ) : null}
-          </div>
-
-          {!sidebarOpen && (
-            <div className="flex flex-col items-center gap-4">
-              <Clock className="w-5 h-5 text-white/60" />
-            </div>
-          )}
         </div>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col ml-16">
+      <div className={`flex-1 flex flex-col transition-all duration-300 ${sidebarOpen ? "ml-72" : "ml-16"}`}>
         <header className="border-b border-border/30 bg-white/50 dark:bg-gray-900/50 backdrop-blur sticky top-0 z-40 shadow-sm">
           <div className="px-8 h-16 flex items-center justify-between">
             <Link href="/" className="flex items-center gap-2 hover:opacity-70 transition">
@@ -490,21 +661,37 @@ export default function DashboardPage() {
               </h1>
             </Link>
             <div className="flex items-center gap-4">
-              {essaysRemaining > 0 ? (
+              {!subscription.isPremium && essaysRemaining > 0 ? (
                 <div className="px-3 py-1 bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800 rounded-lg flex items-center gap-2">
                   <Zap className="w-4 h-4 text-teal-600" />
                   <span className="text-xs font-semibold text-teal-700 dark:text-teal-400">
                     {essaysRemaining} essay{essaysRemaining !== 1 ? 's' : ''} remaining
                   </span>
                 </div>
-              ) : (
+              ) : !subscription.isPremium ? (
                 <button
                   onClick={() => setShowUpgradeModal(true)}
-                  className="px-4 py-1.5 rounded-lg text-xs font-semibold text-white transition"
+                  className="relative px-4 py-1.5 rounded-lg text-xs font-semibold text-white transition-all hover:scale-105 hover:shadow-lg group overflow-hidden"
                   style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)' }}
                 >
-                  Upgrade to Pro
+                  {/* Shimmer effect */}
+                  <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer"></div>
+                  </div>
+                  
+                  {/* Content */}
+                  <span className="relative flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5 animate-pulse" />
+                    Upgrade to Pro
+                  </span>
                 </button>
+              ) : (
+                <div className="px-3 py-1 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-purple-600" />
+                  <span className="text-xs font-semibold text-purple-700 dark:text-purple-400">
+                    Pro Member
+                  </span>
+                </div>
               )}
               
               {hasEssay && (
@@ -517,7 +704,11 @@ export default function DashboardPage() {
                 </button>
               )}
               
-              <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition">
+              <button 
+                onClick={() => router.push('/dashboard/settings')}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition"
+                title="Settings"
+              >
                 <Settings className="w-5 h-5" />
               </button>
               <button onClick={handleLogout} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition">
@@ -852,13 +1043,15 @@ export default function DashboardPage() {
                         <div className="w-3 h-3 bg-red-500 rounded"></div>
                         <span className="text-foreground/60">Weak</span>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <Sparkles className="w-3 h-3 text-purple-500" />
-                        <span className="text-foreground/60">Can rewrite</span>
-                      </div>
+                      {subscription.isPremium && (
+                        <div className="flex items-center gap-1">
+                          <Sparkles className="w-3 h-3 text-purple-500" />
+                          <span className="text-foreground/60">Can rewrite</span>
+                        </div>
+                      )}
                     </div>
                   </div>
-                  
+
                   <div className="text-sm leading-loose">{renderHighlightedEssay()}</div>
                   
                   <p className="text-xs text-foreground/50 mt-6 pt-4 border-t border-border">
@@ -913,7 +1106,9 @@ export default function DashboardPage() {
                         }
                         const aoKey = ao.toUpperCase()
                         const aoName = aoNames[ao] || ao
-                        const currentAOTotal = currentAOs ? (currentAOs as any)[aoName.toLowerCase()] : 5
+                        // Recalculate AOs based on the essay's mark allocation, not current selection
+                        const essayAOs = getAOsForMarks(essay?.markAllocation || 25)
+                        const currentAOTotal = essayAOs ? (essayAOs as any)[aoName.toLowerCase()] : 5
                         const percentage = (score / currentAOTotal) * 100
                         return (
                           <div key={ao}>
@@ -1131,7 +1326,28 @@ export default function DashboardPage() {
               <p className="text-sm text-foreground leading-relaxed">{selectedHighlight.feedback}</p>
             </div>
 
-            {selectedHighlight.quality === 'weak' && (
+            {selectedHighlight.quality === 'weak' && !subscription.isPremium && (
+              <div className="border-t border-border pt-4">
+                <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-4 border border-purple-200 dark:border-purple-800">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="w-5 h-5 text-purple-500" />
+                    <h4 className="text-sm font-bold text-purple-700 dark:text-purple-400">Premium Feature</h4>
+                  </div>
+                  <p className="text-xs text-foreground/70 mb-3">Get AI-powered sentence rewrites with Premium</p>
+                  <button
+                    onClick={() => {
+                      setSelectedHighlight(null)
+                      setShowUpgradeModal(true)
+                    }}
+                    className="w-full px-4 py-2 bg-purple-500 text-white rounded-lg text-xs font-semibold hover:bg-purple-600 transition"
+                  >
+                    Upgrade to Premium
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            {selectedHighlight.quality === 'weak' && subscription.isPremium && (
               <div className="border-t border-border pt-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
@@ -1263,6 +1479,51 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Rewrite Upgrade Modal */}
+      {showRewriteUpgrade && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setShowRewriteUpgrade(false)}>
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full p-8 border-2 border-purple-500" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: 'linear-gradient(135deg, #a855f7 0%, #ec4899 100%)' }}>
+                <Sparkles className="w-8 h-8 text-white" />
+              </div>
+              <h3 className="text-2xl font-bold text-foreground mb-2">Smart Rewrites are Premium</h3>
+              <p className="text-foreground/60">Upgrade to Pro to get AI-powered sentence improvements.</p>
+            </div>
+            
+            <div className="bg-gradient-to-br from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/30 rounded-xl p-6 mb-6 border border-purple-200 dark:border-purple-800">
+              <p className="text-sm font-bold text-foreground mb-3">Pro Includes:</p>
+              <ul className="space-y-2 text-sm text-foreground/70">
+                <li className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-purple-600" />
+                  <span>Unlimited smart rewrites</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-purple-600" />
+                  <span>Unlimited essays</span>
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowRewriteUpgrade(false)}
+                className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-700 text-foreground rounded-lg font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition"
+              >
+                Maybe Later
+              </button>
+              <button
+                onClick={() => router.push('/#pricing')}
+                className="flex-1 px-4 py-3 text-white rounded-lg font-semibold hover:opacity-90 transition shadow-lg"
+                style={{ background: 'linear-gradient(135deg, #a855f7 0%, #ec4899 100%)' }}
+              >
+                Upgrade Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showFeedbackModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setShowFeedbackModal(false)}>
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full p-6 border-2 border-teal-500" onClick={(e) => e.stopPropagation()}>
@@ -1341,6 +1602,23 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {showAlert && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setShowAlert(false)}>
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full p-6 border-2 border-teal-500" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-xl font-bold text-foreground mb-3">{alertTitle}</h3>
+            <p className="text-foreground/70 mb-6 whitespace-pre-line">{alertMessage}</p>
+            <button
+              onClick={() => setShowAlert(false)}
+              className="w-full px-4 py-3 text-white rounded-lg font-semibold hover:opacity-90 transition shadow-lg"
+              style={{ background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)' }}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
